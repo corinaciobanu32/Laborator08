@@ -1,11 +1,14 @@
 package ro.pub.cs.systems.eim.lab08.chatservicejmdns.networkservicediscoveryoperations;
 
+import android.app.Fragment;
+import android.app.FragmentManager;
 import android.content.Context;
 import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.net.NoRouteToHostException;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,6 +18,8 @@ import java.util.concurrent.BlockingQueue;
 import ro.pub.cs.systems.eim.lab08.chatservicejmdns.general.Constants;
 import ro.pub.cs.systems.eim.lab08.chatservicejmdns.general.Utilities;
 import ro.pub.cs.systems.eim.lab08.chatservicejmdns.model.Message;
+import ro.pub.cs.systems.eim.lab08.chatservicejmdns.view.ChatActivity;
+import ro.pub.cs.systems.eim.lab08.chatservicejmdns.view.ChatConversationFragment;
 
 public class ChatClient {
 
@@ -27,7 +32,7 @@ public class ChatClient {
     private SendThread sendThread = null;
     private ReceiveThread receiveThread = null;
 
-    private BlockingQueue<String> messageQueue = new ArrayBlockingQueue<String>(Constants.MESSAGE_QUEUE_CAPACITY);
+    private final BlockingQueue<String> messageQueue = new ArrayBlockingQueue<String>(Constants.MESSAGE_QUEUE_CAPACITY);
 
     private List<Message> conversationHistory = new ArrayList<>();
 
@@ -38,26 +43,27 @@ public class ChatClient {
         this.host = host;
         this.socket = null;
     }
+
+    public ChatClient(Context context, Socket socket) {
+        this.context = context;
+        this.socket = socket;
+        if (socket != null) {
+            startThreads();
+        }
+    }
+
     public void connect() {
         try {
             socket = new Socket(host, port);
             Log.i(Constants.TAG, "A socket has been created on: " + socket.getInetAddress() + ":" + socket.getLocalPort());
-        } catch (NoRouteToHostException e){
-        Log.i(Constants.TAG, "Address is stale: " + host + ":" + port);
+        } catch (NoRouteToHostException e) {
+            Log.i(Constants.TAG, "Address is stale: " + host + ":" + port);
         } catch (IOException ioException) {
             Log.i(Constants.TAG, "An exception has occurred while creating the socket: " + ioException.getMessage());
             if (Constants.DEBUG) {
                 ioException.printStackTrace();
             }
         }
-        if (socket != null) {
-            startThreads();
-        }
-    }
-
-    public ChatClient(Context context, Socket socket) {
-        this.context = context;
-        this.socket = socket;
         if (socket != null) {
             startThreads();
         }
@@ -70,6 +76,59 @@ public class ChatClient {
             Log.e(Constants.TAG, "An exception has occurred: " + interruptedException.getMessage());
             if (Constants.DEBUG) {
                 interruptedException.printStackTrace();
+            }
+        }
+    }
+
+    public Socket getSocket() {
+        return socket;
+    }
+
+    public void setSocket(Socket socket) {
+        this.socket = socket;
+    }
+
+    public Context getContext() {
+        return context;
+    }
+
+    public void setContext(Context context) {
+        this.context = context;
+    }
+
+    public String toString() {
+        return host + ":" + port;
+    }
+
+    public List<Message> getConversationHistory() {
+        return conversationHistory;
+    }
+
+    public void setConversationHistory(List<Message> conversationHistory) {
+        this.conversationHistory = conversationHistory;
+    }
+
+    public void startThreads() {
+        sendThread = new SendThread();
+        sendThread.start();
+
+        receiveThread = new ReceiveThread();
+        receiveThread.start();
+    }
+
+    public void stopThreads() {
+        if (sendThread != null)
+            sendThread.stopThread();
+        if (receiveThread != null)
+            receiveThread.stopThread();
+        try {
+            if (socket != null) {
+                socket.close();
+            }
+        } catch (IOException ioException) {
+            Log.e(Constants.TAG, "An exception has occurred: " + ioException.getMessage());
+            if (Constants.DEBUG) {
+                ioException.printStackTrace();
             }
         }
     }
@@ -91,6 +150,27 @@ public class ChatClient {
                     //   - create a Message instance, with the content received and Constants.MESSAGE_TYPE_SENT as message type
                     //   - add the message to the conversationHistory
                     //   - if the ChatConversationFragment is visible (query the FragmentManager for the Constants.FRAGMENT_TAG tag)
+
+                    while (!Thread.currentThread().isInterrupted()) {
+                        String msg = messageQueue.take();
+                        if (msg != null) {
+                            Log.d(Constants.TAG, "Sending the message: " + msg);
+                            printWriter.println(msg);
+                            printWriter.flush();
+                            Message message = new Message(msg, Constants.MESSAGE_TYPE_SENT);
+                            conversationHistory.add(message);
+                            if (context != null) {
+                                ChatActivity chatActivity = (ChatActivity) context;
+                                FragmentManager fragmentManager = chatActivity.getFragmentManager();
+                                Fragment fragment = fragmentManager.findFragmentByTag(Constants.FRAGMENT_TAG);
+                                if (fragment instanceof ChatConversationFragment && fragment.isVisible()) {
+                                    ChatConversationFragment chatConversationFragment = (ChatConversationFragment) fragment;
+                                    chatConversationFragment.appendMessage(message);
+                                }
+                            }
+                        }
+
+                    }
 
                 } catch (Exception exception) {
                     Log.e(Constants.TAG, "An exception has occurred: " + exception.getMessage());
@@ -126,7 +206,23 @@ public class ChatClient {
                     //   - add the message to the conversationHistory
                     //   - if the ChatConversationFragment is visible (query the FragmentManager for the Constants.FRAGMENT_TAG tag)
                     //   append the message to the graphic user interface
-
+                    while (!Thread.currentThread().isInterrupted()) {
+                        String msg = bufferedReader.readLine();
+                        if (msg != null) {
+                            Log.d(Constants.TAG, "Received the message: " + msg);
+                            Message message = new Message(msg, Constants.MESSAGE_TYPE_RECEIVED);
+                            conversationHistory.add(message);
+                            if (context != null) {
+                                ChatActivity chatActivity = (ChatActivity) context;
+                                FragmentManager fragmentManager = chatActivity.getFragmentManager();
+                                Fragment fragment = fragmentManager.findFragmentByTag(Constants.FRAGMENT_TAG);
+                                if (fragment instanceof ChatConversationFragment && fragment.isVisible()) {
+                                    ChatConversationFragment chatConversationFragment = (ChatConversationFragment) fragment;
+                                    chatConversationFragment.appendMessage(message);
+                                }
+                            }
+                        }
+                    }
                 } catch (Exception exception) {
                     Log.e(Constants.TAG, "An exception has occurred: " + exception.getMessage());
                     if (Constants.DEBUG) {
@@ -142,58 +238,5 @@ public class ChatClient {
             interrupt();
         }
 
-    }
-
-    public void setSocket(Socket socket) {
-        this.socket = socket;
-    }
-
-    public Socket getSocket() {
-        return socket;
-    }
-
-    public void setContext(Context context) {
-        this.context = context;
-    }
-
-    public Context getContext() {
-        return context;
-    }
-
-    public String toString(){
-        return host.toString() + ":" + port;
-    }
-
-    public void setConversationHistory(List<Message> conversationHistory) {
-        this.conversationHistory = conversationHistory;
-    }
-
-    public List<Message> getConversationHistory() {
-        return conversationHistory;
-    }
-
-    public void startThreads() {
-        sendThread = new SendThread();
-        sendThread.start();
-
-        receiveThread = new ReceiveThread();
-        receiveThread.start();
-    }
-
-    public void stopThreads() {
-        if(sendThread != null)
-            sendThread.stopThread();
-        if(receiveThread != null)
-            receiveThread.stopThread();
-        try {
-            if (socket != null) {
-                socket.close();
-            }
-        } catch (IOException ioException) {
-            Log.e(Constants.TAG, "An exception has occurred: " + ioException.getMessage());
-            if (Constants.DEBUG) {
-                ioException.printStackTrace();
-            }
-        }
     }
 }
